@@ -232,3 +232,7 @@ would resolve this for every distribution at once, not just Omarchy.
 
 Prior art in the same space: [Somnius/VoxTyper](https://github.com/Somnius/VoxTyper)
 takes a similar whisper.cpp approach for Arch and Fedora.
+
+## License
+
+MIT. Copy it, adapt it, take it to your own Omarchy.
