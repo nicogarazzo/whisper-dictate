@@ -30,7 +30,7 @@ NOTIFY=1
 # close truncates the transcript, so keep this comfortably above 1.0.
 CTX_MARGIN=135         # percent
 
-[[ -f "$CONFIG_DIR/config" ]] && . "$CONFIG_DIR/config"
+[[ -f $CONFIG_DIR/config ]] && . "$CONFIG_DIR/config"
 
 mkdir -p "$RUN_DIR"
 STATE_FILE="$RUN_DIR/state"
@@ -41,7 +41,7 @@ LANG_FILE="$RUN_DIR/language"
 set_state() { echo "$1" >"$STATE_FILE"; }
 
 notify() {
-  [[ "$NOTIFY" == 1 ]] || return 0
+  (( NOTIFY )) || return 0
   if command -v omarchy-notification-send >/dev/null; then
     omarchy-notification-send "$1" "${2:-}" -t "${3:-2000}" >/dev/null 2>&1
   elif command -v notify-send >/dev/null; then
@@ -52,7 +52,7 @@ notify() {
 die() { notify "Dictation" "$1" 4000; echo "whisper-dictate: $1" >&2; exit 1; }
 
 is_recording() {
-  [[ -f "$PID_FILE" ]] && kill -0 "$(cat "$PID_FILE")" 2>/dev/null
+  [[ -f $PID_FILE ]] && kill -0 "$(cat "$PID_FILE")" 2>/dev/null
 }
 
 start() {
@@ -60,7 +60,7 @@ start() {
   # never clear, so only bail out if a live recorder is genuinely running.
   is_recording && return 0
   command -v whisper-cli >/dev/null || die "whisper-cli not installed"
-  [[ -f "$MODEL" ]] || die "model not found: $MODEL"
+  [[ -f $MODEL ]] || die "model not found: $MODEL"
 
   # Per-take language override: `whisper-dictate start en`.
   echo "${1:-$LANGUAGE}" >"$LANG_FILE"
@@ -100,7 +100,7 @@ stop() {
   rm -f "$PID_FILE"
 
   # Too short to contain speech (the WAV header alone is 44 bytes).
-  if [[ ! -s "$WAV_FILE" ]] || (( $(stat -c%s "$WAV_FILE") < 8000 )); then
+  if [[ ! -s $WAV_FILE ]] || (( $(stat -c%s "$WAV_FILE") < 8000 )); then
     set_state idle
     return 0
   fi
@@ -109,7 +109,7 @@ stop() {
 
   local lang
   lang="$(cat "$LANG_FILE" 2>/dev/null)"
-  [[ -n "$lang" ]] || lang="$LANGUAGE"
+  [[ -n $lang ]] || lang=$LANGUAGE
 
   local ctx_args=()
   local ctx
@@ -126,12 +126,12 @@ stop() {
   set_state idle
 
   # Whisper emits bracketed markers such as [BLANK_AUDIO] for silence.
-  if [[ -z "$text" || "$text" =~ ^\[.*\]$ ]]; then
+  if [[ -z $text || $text =~ ^\[.*\]$ ]]; then
     notify "Dictation" "Nothing heard" 1500
     return 0
   fi
 
-  if [[ "$OUTPUT_MODE" == "clipboard" ]]; then
+  if [[ $OUTPUT_MODE == "clipboard" ]]; then
     printf '%s' "$text" | wl-copy
     notify "Dictation" "Copied: $text" 3000
   elif ! wtype -- "$text" 2>/dev/null; then

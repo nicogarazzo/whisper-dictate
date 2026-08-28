@@ -1,0 +1,15 @@
+#!/bin/bash
+
+# Runs every test in test/. Mirrors Omarchy's ./test/all entry point.
+
+set -uo pipefail
+
+cd "$(dirname "${BASH_SOURCE[0]}")/.."
+
+status=0
+for suite in test/*-test.sh; do
+  printf '\033[1m%s\033[0m\n' "$suite"
+  bash "$suite" || status=1
+done
+
+exit $status
