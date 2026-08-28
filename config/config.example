@@ -1,0 +1,37 @@
+# Config for whisper-dictate. Shell syntax; sourced by the script.
+# Installed to ~/.config/whisper-dictate/config
+
+# Model file. $DATA_DIR is ~/.local/share/whisper-dictate.
+# Speed on an Ivy Bridge i5 (no AVX2), 4 s clip, language pinned:
+#   ggml-tiny-q5_1    ~3.3 s   noticeably less accurate
+#   ggml-base-q8_0    ~5.4 s   <- good default, effectively lossless vs f16
+#   ggml-base         ~7.1 s   f16; slower than q8_0, no accuracy gain
+#   ggml-base-q5_1    ~8.8 s   q5 dequantisation is expensive without AVX2
+#   ggml-small-q5_1  ~19.2 s   too slow for dictation on this class of CPU
+MODEL="$DATA_DIR/models/ggml-base-q8_0.bin"
+
+# Default language for F9 and Super+Ctrl+X. F10 always forces English.
+# "auto" works but costs a separate detection pass over the whole clip,
+# roughly doubling the time -- pin it instead.
+#
+# Note: a mismatched language does not just lower accuracy, it makes Whisper
+# TRANSLATE. English speech transcribed with LANGUAGE="es" comes out as
+# Spanish prose. Use F10 for English rather than changing this.
+LANGUAGE="es"
+
+# "type" inserts at the cursor, "clipboard" copies instead.
+OUTPUT_MODE="type"
+
+# Safety limit for a single recording, in seconds.
+MAX_DURATION=60
+
+# Desktop notifications on start/finish. 1 or 0.
+NOTIFY=1
+
+# Threads for inference. Defaults to nproc.
+# THREADS=4
+
+# Margin (percent) when shrinking the audio context to the clip length.
+# Below ~110 the transcript gets truncated and slower. Raise it if you see
+# clipped endings; lower it only if you are certain your takes are short.
+CTX_MARGIN=135

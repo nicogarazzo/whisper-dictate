@@ -1,0 +1,149 @@
+#!/bin/bash
+# Push-to-talk dictation for Hyprland/Omarchy using whisper.cpp.
+#
+# Records from the default PipeWire source, transcribes locally with
+# whisper-cli, and types the result at the cursor with wtype.
+#
+#   whisper-dictate start [lang]
+#   whisper-dictate stop
+#   whisper-dictate toggle [lang]
+#   whisper-dictate status
+#
+# Config: ~/.config/whisper-dictate/config
+
+set -uo pipefail
+
+CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/whisper-dictate"
+DATA_DIR="$HOME/.local/share/whisper-dictate"
+RUN_DIR="${XDG_RUNTIME_DIR:-/tmp}/whisper-dictate"
+
+# Defaults, overridable in the config file.
+MODEL="$DATA_DIR/models/ggml-base-q8_0.bin"
+# Pin the language. "auto" makes Whisper run a separate detection pass over
+# the clip before transcribing, which roughly doubles total time.
+LANGUAGE="es"
+THREADS="$(nproc)"
+MAX_DURATION=60        # safety limit, seconds
+OUTPUT_MODE="type"     # "type" or "clipboard"
+NOTIFY=1
+# Margin applied when shrinking the audio context (see below). Cutting too
+# close truncates the transcript, so keep this comfortably above 1.0.
+CTX_MARGIN=135         # percent
+
+[[ -f "$CONFIG_DIR/config" ]] && . "$CONFIG_DIR/config"
+
+mkdir -p "$RUN_DIR"
+STATE_FILE="$RUN_DIR/state"
+PID_FILE="$RUN_DIR/record.pid"
+WAV_FILE="$RUN_DIR/recording.wav"
+LANG_FILE="$RUN_DIR/language"
+
+set_state() { echo "$1" >"$STATE_FILE"; }
+
+notify() {
+  [[ "$NOTIFY" == 1 ]] || return 0
+  if command -v omarchy-notification-send >/dev/null; then
+    omarchy-notification-send "$1" "${2:-}" -t "${3:-2000}" >/dev/null 2>&1
+  elif command -v notify-send >/dev/null; then
+    notify-send -t "${3:-2000}" "$1" "${2:-}" >/dev/null 2>&1
+  fi
+}
+
+die() { notify "Dictation" "$1" 4000; echo "whisper-dictate: $1" >&2; exit 1; }
+
+is_recording() {
+  [[ -f "$PID_FILE" ]] && kill -0 "$(cat "$PID_FILE")" 2>/dev/null
+}
+
+start() {
+  # A stale "recording" state would otherwise strand the old language and
+  # never clear, so only bail out if a live recorder is genuinely running.
+  is_recording && return 0
+  command -v whisper-cli >/dev/null || die "whisper-cli not installed"
+  [[ -f "$MODEL" ]] || die "model not found: $MODEL"
+
+  # Per-take language override: `whisper-dictate start en`.
+  echo "${1:-$LANGUAGE}" >"$LANG_FILE"
+
+  rm -f "$WAV_FILE"
+  # pw-record writes a WAV whisper-cli reads directly: 16 kHz mono s16.
+  timeout "$MAX_DURATION" pw-record \
+    --rate 16000 --channels 1 --format s16 "$WAV_FILE" >/dev/null 2>&1 &
+  echo $! >"$PID_FILE"
+  set_state recording
+  notify "Dictation" "Listening..." 1500
+}
+
+# Whisper's encoder always processes a 30 s window (audio_ctx 1500, i.e. 50
+# per second of audio), so a 4 s take otherwise costs the same as a 30 s one.
+# Shrinking the context to just cover this clip is the biggest speedup for
+# short takes. The margin matters: cutting too close truncates the transcript
+# AND runs slower, because Whisper starts retrying with temperature fallback.
+audio_ctx_for() {
+  local bytes secs ctx
+  bytes="$(stat -c%s "$1")"
+  secs=$(( (bytes - 44) / 32000 + 1 ))        # 16 kHz mono s16 = 32000 B/s
+  ctx=$(( secs * 50 * CTX_MARGIN / 100 ))
+  (( ctx < 256 )) && ctx=256
+  (( ctx > 1500 )) && ctx=0                   # 0 = full context, let Whisper decide
+  echo "$ctx"
+}
+
+stop() {
+  is_recording || { set_state idle; return 0; }
+
+  local pid
+  pid="$(cat "$PID_FILE")"
+  # timeout(1) forwards TERM to pw-record, which flushes the WAV header.
+  kill -TERM "$pid" 2>/dev/null
+  wait "$pid" 2>/dev/null
+  rm -f "$PID_FILE"
+
+  # Too short to contain speech (the WAV header alone is 44 bytes).
+  if [[ ! -s "$WAV_FILE" ]] || (( $(stat -c%s "$WAV_FILE") < 8000 )); then
+    set_state idle
+    return 0
+  fi
+
+  set_state transcribing
+
+  local lang
+  lang="$(cat "$LANG_FILE" 2>/dev/null)"
+  [[ -n "$lang" ]] || lang="$LANGUAGE"
+
+  local ctx_args=()
+  local ctx
+  ctx="$(audio_ctx_for "$WAV_FILE")"
+  (( ctx > 0 )) && ctx_args=(-ac "$ctx")
+
+  local text
+  text="$(whisper-cli -m "$MODEL" -f "$WAV_FILE" -t "$THREADS" \
+    -nt -np -l "$lang" "${ctx_args[@]}" 2>/dev/null)"
+
+  # Collapse to a single line and trim surrounding whitespace.
+  text="$(echo "$text" | tr '\n' ' ' | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')"
+
+  set_state idle
+
+  # Whisper emits bracketed markers such as [BLANK_AUDIO] for silence.
+  if [[ -z "$text" || "$text" =~ ^\[.*\]$ ]]; then
+    notify "Dictation" "Nothing heard" 1500
+    return 0
+  fi
+
+  if [[ "$OUTPUT_MODE" == "clipboard" ]]; then
+    printf '%s' "$text" | wl-copy
+    notify "Dictation" "Copied: $text" 3000
+  elif ! wtype -- "$text" 2>/dev/null; then
+    printf '%s' "$text" | wl-copy
+    notify "Dictation" "Typing failed, copied to clipboard" 3000
+  fi
+}
+
+case "${1:-toggle}" in
+  start)  start "${2:-}" ;;
+  stop)   stop ;;
+  toggle) if is_recording; then stop; else start "${2:-}"; fi ;;
+  status) cat "$STATE_FILE" 2>/dev/null || echo idle ;;
+  *) echo "usage: whisper-dictate {start [lang]|stop|toggle [lang]|status}" >&2; exit 1 ;;
+esac

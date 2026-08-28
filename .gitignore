@@ -1,0 +1,4 @@
+# Models are hundreds of MB and are downloaded by install.sh.
+*.bin
+# Timestamped backups the installer leaves behind.
+*.bak.*
